@@ -1,87 +1,12 @@
-/**
+package main
 
-request start:
-
-	server.log:Oct 08 18:17:12 ubuntu1604 neutron-server[2367]: DEBUG neutron.api.v2.base 
-	[None req-6245c77d-5017-4657-b35b-7ab1d247112b admin admin] Request body: 
-	{u'loadbalancer': {u'vip_subnet_id': u'b6fc5c77-d727-456e-bbd8-67a82534676c', u'name': u'zongzw20201009', u'admin_state_up': True}} 
-	{{(pid=2379) prepare_request_body /opt/stack/neutron/neutron/api/v2/base.py:695}}
-
-neutron driver start to work:
-
-	server.log:Oct 08 18:17:14 ubuntu1604 neutron-server[2367]: 
-	INFO neutron_lbaas.services.loadbalancer.plugin 
-	[None req-6245c77d-5017-4657-b35b-7ab1d247112b admin admin] Calling driver operation LoadBalancerManager.create
-
-neutron response to client:
-
-	server.log:Oct 08 18:17:17 ubuntu1604 neutron-server[2367]: INFO neutron.wsgi 
-	[None req-6245c77d-5017-4657-b35b-7ab1d247112b admin admin] 
-	10.145.72.60 "POST /v2.0/lbaas/loadbalancers HTTP/1.1" status: 201  len: 654 time: 5.0711482
-
-Enter agent logic: missing time string
-
-	f5-openstack-agent.log:DEBUG f5_openstack_agent.lbaasv2.drivers.bigip.agent_manager 
-	[None req-6245c77d-5017-4657-b35b-7ab1d247112b admin admin] f5_openstack_agent.lbaasv2.drivers.bigip.agent_manager.LbaasAgentManager 
-	method create_loadbalancer called with arguments (<neutron_lib.context.Context object at 0x7f49a094fb10>,) 
-	{u'service': {u'subnets': {u'b6fc5c77-d727-456e-bbd8-67a82534676c': 
-	{u'updated_at': u'2020-08-03T15:02:20Z', u'ipv6_ra_mode': None, u'allocation_pools': [{u'start': u'10.0.0.2', u'end': u'10.0.0.62'}], 
-	u'host_routes': [], u'revision_number': 0, u'ipv6_address_mode': None, u'id': u'b6fc5c77-d727-456e-bbd8-67a82534676c', u'dns_nameservers': 
-	[], u'gateway_ip': u'10.0.0.1', u'shared': False, u'project_id': u'1d78c8bd2bc44081a2fbe8c124c570eb', u'description': u'', u'tags': [], 
-	u'cidr': u'10.0.0.0/26', u'subnetpool_id': u'1cec27b0-3a65-42cf-9319-809e93cf1339', u'service_types': [], u'name': u'private-subnet', 
-	u'enable_dhcp': True, u'network_id': u'f4a6bf84-444a-41d3-a934-3c10c8e0eea5', u'tenant_id': u'1d78c8bd2bc44081a2fbe8c124c570eb', 
-	u'created_at': u'2020-08-03T15:02:20Z', u'ip_version': 4}}, u'qos': u'', u'listeners': [], u'healthmonitors': [], u'members': [], 
-	u'l7policy_rules': [], u'pools': [], u'l7policies': [], u'networks': {u'f4a6bf84-444a-41d3-a934-3c10c8e0eea5': 
-	{u'provider:physical_network': None, u'ipv6_address_scope': None, u'revision_number': 4, u'port_security_enabled': True, 
-	u'mtu': 1450, u'id': u'f4a6bf84-444a-41d3-a934-3c10c8e0eea5', u'router:external': False, u'availability_zone_hints': [], 
-	u'availability_zones': [u'nova'], u'ipv4_address_scope': None, u'shared': False, u'project_id': u'1d78c8bd2bc44081a2fbe8c124c570eb', 
-	u'status': u'ACTIVE', u'subnets': [u'b6fc5c77-d727-456e-bbd8-67a82534676c', u'2988ebde-b5b1-4d7f-aece-d171c05d59a4'], u'description': u'', 
-	u'tags': [], u'updated_at': u'2020-08-03T15:02:23Z', u'provider:segmentation_id': 8, u'name': u'private', u'admin_state_up': True, 
-	u'tenant_id': u'1d78c8bd2bc44081a2fbe8c124c570eb', u'created_at': u'2020-08-03T15:02:17Z', u'provider:network_type': u'vxlan', u'vlan_transparent': None}}, 
-	u'loadbalancer': {u'vxlan_vteps': [u'10.145.72.60'], u'name': u'zongzw20201009', u'provisioning_status': u'PENDING_CREATE', u'network_id': 
-	u'f4a6bf84-444a-41d3-a934-3c10c8e0eea5', u'tenant_id': u'38ac07a46dad448cb93bec736ba89f1c', u'admin_state_up': True, u'provider': None, 
-	u'id': u'18f336cd-dbf4-44e0-8a77-4ed31ae015d6', u'gre_vteps': [], u'pools': [], u'listeners': [], u'vip_port_id': u'2f13286a-24d9-4165-8370-43adb1f133ba', 
-	u'vip_address': u'10.0.0.21', u'vip_subnet_id': u'b6fc5c77-d727-456e-bbd8-67a82534676c', u'vip_port': {u'allowed_address_pairs': [], 
-	u'extra_dhcp_opts': [], u'updated_at': u'2020-10-09T01:17:14Z', u'device_owner': u'neutron:LOADBALANCERV2', u'revision_number': 4, 
-	u'port_security_enabled': True, u'binding:profile': {}, u'fixed_ips': [{u'subnet_id': u'b6fc5c77-d727-456e-bbd8-67a82534676c', 
-	u'ip_address': u'10.0.0.21'}, {u'subnet_id': u'2988ebde-b5b1-4d7f-aece-d171c05d59a4', u'ip_address': 
-	u'fde8:3508:8a39:0:f816:3eff:fe3e:6b09'}], u'id': u'2f13286a-24d9-4165-8370-43adb1f133ba', 
-	u'security_groups': [u'412f1deb-3e00-46dd-9037-6f468812b25e'], u'binding:vif_details': {}, 
-	u'binding:vif_type': u'unbound', u'mac_address': u'fa:16:3e:3e:6b:09', u'project_id': 
-	u'38ac07a46dad448cb93bec736ba89f1c', u'status': u'DOWN', u'binding:host_id': u'', u'description': None, 
-	u'tags': [], u'device_id': u'18f336cd-dbf4-44e0-8a77-4ed31ae015d6', u'name': u'loadbalancer-18f336cd-dbf4-44e0-8a77-4ed31ae015d6', 
-	u'admin_state_up': False, u'network_id': u'f4a6bf84-444a-41d3-a934-3c10c8e0eea5', u'tenant_id': u'38ac07a46dad448cb93bec736ba89f1c', 
-	u'created_at': u'2020-10-09T01:17:13Z', u'binding:vnic_type': u'normal'}, u'operating_status': u'OFFLINE', u'description': u''}}, 
-	u'loadbalancer': {u'description': u'', u'provisioning_status': u'PENDING_CREATE', u'tenant_id': u'38ac07a46dad448cb93bec736ba89f1c', 
-	u'admin_state_up': True, u'provider': None, u'pools': [], u'listeners': [], u'vip_port_id': u'2f13286a-24d9-4165-8370-43adb1f133ba', 
-	u'vip_address': u'10.0.0.21', u'vip_subnet_id': u'b6fc5c77-d727-456e-bbd8-67a82534676c', u'id': u'18f336cd-dbf4-44e0-8a77-4ed31ae015d6', 
-	u'operating_status': u'OFFLINE', u'name': u'zongzw20201009'}} {{(pid=14645) wrapper /usr/local/lib/python2.7/dist-packages/oslo_log/helpers.py:66}}
-
-
-"get WITH uri" 阶段
-
-	folder virtual
-
-
-update_loadbalancer_status
-
-	f5-openstack-agent.log:DEBUG f5_openstack_agent.lbaasv2.drivers.bigip.plugin_rpc 
-	[^[[01;36mNone req-6245c77d-5017-4657-b35b-7ab1d247112b ^[[00;36madmin admin] ^[[01;35m
-	f5_openstack_agent.lbaasv2.drivers.bigip.plugin_rpc.LBaaSv2PluginRPC method update_loadbalancer_status called with arguments 
-	(u'18f336cd-dbf4-44e0-8a77-4ed31ae015d6', 'ACTIVE', 'ONLINE') {}^[[00m ^[[00;33m
-	{{(pid=14645) wrapper /usr/local/lib/python2.7/dist-packages/oslo_log/helpers.py:66}}^[[00m
-
- */
-
- package main
-
- import (
-	 "fmt"
+import (
+	"fmt"
 	"log"
 	"github.com/trivago/grok"
- )
+)
  
- func main() {
+func main() {
 	//  fmt.Println("# Default Capture :")
 	//  g, _ := grok.New(grok.Config{})
 	//  values, _ := g.ParseString("%{COMMONAPACHELOG}", `127.0.0.1 - - [23/Apr/2014:22:58:32 +0200] "GET /index.php HTTP/1.1" 404 207`)
