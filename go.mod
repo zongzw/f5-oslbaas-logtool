@@ -1,4 +1,4 @@
-module a-tool
+module f5-oslbaasv2-logtool
 
 go 1.14
 
