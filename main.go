@@ -1,13 +1,16 @@
 package main
 
 import (
+	"strings"
 	"fmt"
 	"log"
 	"flag"
 	"os"
 	"bufio"
-	"encoding/json"
+	"time"
+	// "encoding/json"
 	"path/filepath"
+	// "regexp"
 	"github.com/trivago/grok"
 )
 
@@ -27,11 +30,84 @@ func (i *arrayFlags) Set(value string) error {
 	return nil
 }
 
-func handleArguments(server_logs, agent_logs []string, output_file, output_ts  string) ([]*os.File, error){
+func IsContains(items []string, item string) bool {
+	for _, n := range items {
+		if n == item {
+			return true
+		}
+	}
+	return false
+}
+
+func handleArguments(logpaths []string, output_file, output_ts  string) ([]*os.File, error){
+
+	// handle output file for result.
+	if output_file == "" {
+		return nil, fmt.Errorf("output_filepath should be appointed.")
+	}
+	dir, err := filepath.Abs(filepath.Dir(output_file))
+	if err != nil {
+		return nil, err
+	} else {
+		_, err := os.Stat(dir)
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	_, err = os.Stat(output_file)
+	if err == nil {
+		return nil, fmt.Errorf("File %s already exists.", output_file)
+	}
+
 	var fileHandlers []*os.File
 
+	// parse regex paths
+	paths :=[]string{}
 	pathOK := true
-	for _, n := range append(server_logs, agent_logs...) {
+	for _, n := range logpaths {
+		p := string(n)
+		ms, e := filepath.Glob(p)
+		if e != nil {
+			log.Printf("Invalid file path or path pattern: %s\n", p)
+			pathOK = false
+		}
+		paths = append(paths, ms...)
+	}
+	if !pathOK || len(paths) == 0 {
+		return nil, fmt.Errorf("Invalid file path detected, cannot to continue.\n")
+	}
+
+
+	fmt.Println(logpaths)
+	fmt.Println(paths)
+	
+	// find absolute paths
+	pathOK = true
+	for i, p := range paths {
+		absP, err := filepath.Abs(p)
+		if err != nil {
+			log.Printf("Cannot determine the absolute path for %s\n", p)
+			pathOK = false
+		}
+		paths[i] = absP
+	}
+	if !pathOK {
+		return nil, fmt.Errorf("Invalid paths found while getting the absolute path. Cannot continue.\n")
+	}
+
+	// remove duplicate paths
+	noDupPaths := []string{}
+	for _, p := range paths {
+		if !IsContains(noDupPaths, p) {
+			noDupPaths = append(noDupPaths, p)
+		}
+	}
+	paths = noDupPaths
+	log.Printf("Handling files: %s\n", paths)
+
+	// open as *os.File for reading
+	pathOK = true
+	for _, n := range paths {
 		p := string(n)
 		f, err := os.Stat(string(p))
 		if err == nil {
@@ -55,17 +131,6 @@ func handleArguments(server_logs, agent_logs []string, output_file, output_ts  s
 	}
 	if !pathOK {
 		return nil, fmt.Errorf("Invalid path(s) provided.")
-	}
-
-	dir, err := filepath.Abs(filepath.Dir(output_file))
-	if err != nil {
-		return nil, err
-	} else {
-		_, err := os.Stat(dir)
-		if os.IsNotExist(err) {
-			log.Fatal(err)
-			return nil, err
-		}
 	}
 
 	return fileHandlers, nil
@@ -109,13 +174,11 @@ func read_and_match(g *grok.Grok, fr *os.File, p map[string]string, result map[s
 			}
 
 			 for k, v := range values {
-				//  log.Printf("%+25s: %s\n", k, v)
 				result[req_id][k] = v
 
 			 }
 
 			 break
-			//  log.Println()
 		}
 		
 	}
@@ -127,30 +190,41 @@ func read_and_match(g *grok.Grok, fr *os.File, p map[string]string, result map[s
 	}
 }
 
+const FK_TIMELAYOUT = "2006-01-02 15:04:05"
+
 func main() {
 
-	var server_logs arrayFlags
-	var agent_logs arrayFlags
+	var logpaths arrayFlags
+	// var agent_logs arrayFlags
 	var output_file string
 	var output_ts string
 
-	flag.Var(&server_logs, "server-log", "Neutron server log path: /path/to/server.log, e.g: /var/log/neutron/server.log")
-	flag.Var(&agent_logs, "agent-log", "F5-OpenStack-Agent log path: /path/to/f5-openstack-agent.log, e.g: /var/log/neutron/f5-openstack-agent.log")
-	flag.StringVar(&output_file, "output-filepath", "./result.json", "Output the result to file, e.g: /path/to/result.json")
-	flag.StringVar(&output_ts, "output-ts", "./result.json", "Output the result to f5-telemetry-analytics. e.g: http://1.1.1.1:200002")
+	flag.Var(&logpaths, "logpath", 
+		"The log path for analytics. It can be used multiple times. " +
+		"Path regex pattern can be used WITHIN \"\".\n" +
+		"e.g: --logpath /path/to/f5-openstack-agent.log " +
+		"--logpath \"/var/log/neutron/f5-openstack-*.log\" " +
+		"--logpath \"/var/log/neutron/server*.log\"")
+	flag.StringVar(&output_file, "output-filepath", "./result.json", 
+		"Output the result to file, e.g: /path/to/result.json")
+	flag.StringVar(&output_ts, "output-ts", "./result.json", 
+		"Output the result to f5-telemetry-analytics. e.g: http://1.1.1.1:200002")
 
 	flag.Parse()
 
-	fmt.Println(server_logs)
-	fmt.Println(agent_logs)
-	fmt.Println(output_file)
-	fmt.Println(output_ts)
+	// fmt.Println(logpaths)
+	// fmt.Println(agent_logs)
+	// fmt.Println(output_file)
+	// fmt.Println(output_ts)
 
-	fileHandlers, err := handleArguments(server_logs, agent_logs, output_file, output_file)
+	fileHandlers, err := handleArguments(logpaths, output_file, output_file)
+	
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	for _, f := range fileHandlers {
+		defer f.Close()
+	}
 
 	pBasicFields := map[string]string{
 		"UUID": `[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}`,    	// 6245c77d-5017-4657-b35b-7ab1d247112b
@@ -257,30 +331,59 @@ func main() {
 	}
 	
 
-	// for k, vs := range tests() {
-	// 	fmt.Printf("------- %s --------\n", k)
-	// 	for _, v := range vs {
-	// 		value, err := test_sg(k, v, g)
-	// 		debug(value, err)
-	// 	}
-	// }
+	CalculateDuration(result)
 
-	buff, err := json.Marshal(result)
-	fmt.Printf("%s\n", buff)
+	fw, e := os.Create(output_file)
+	if e != nil {
+		log.Fatal(e)
+	}
+	defer fw.Close()
+
+	title_line := []string{
+		"req_id", "object_id", "object_type", "operation_type", "request_body", 
+		"neutron_api_time", "call_f5driver_time", "rpc_f5agent_time", "call_f5agent_time", "call_bigip_time", "update_status_time", 
+		"dur_neu_drv", "dur_drv_rpc", "dur_rpc_agt", "dur_agt_upd", "total", 
+	}
+
+	_, e = fw.WriteString(strings.Join(title_line, ",") + "\n")
+	if e != nil {
+		log.Fatal(e)
+	}
+
 	for _, v := range result {
-		fmt.Printf("%s,%s,%s,%s,\"%s\",%s,%s,%s,%s,%s,%s\n",
-			v["req_id"],
-			v["object_id"],
-			v["object_type"],
-			v["operation_type"],
-			v["request_body"],
-			v["neutron_api_time"],
-			v["call_f5driver_time"],
-			v["rpc_f5agent_time"],
-			v["call_f5agent_time"],
-			v["call_bigip_time"],
-			v["update_status_time"],
-		)
+		a := []string{}
+		for _, n := range title_line {
+			a = append(a, fmt.Sprintf("\"%s\"", v[n]))
+		}
+		line := strings.Join(a, ",") + "\n"
+
+		_, e := fw.WriteString(line)
+		if e != nil {
+			log.Fatal(e)
+		}
+	}
+}
+
+// func GetTimestamp(r regexp.Regexp, datm string) time.Time {
+func FKTheTime(datm string) time.Time {
+	dt, _ := time.Parse(FK_TIMELAYOUT, datm)
+	// fmt.Printf("%s\n", e)
+	return dt;
+}
+func CalculateDuration(result map[string]map[string]string) {
+
+	for _, r := range result {
+		tNeutron := FKTheTime(r["neutron_api_time"])
+		tDriver := FKTheTime(r["call_f5driver_time"])
+		tMQ := FKTheTime(r["rpc_f5agent_time"])
+		tAgent := FKTheTime(r["call_f5agent_time"])
+		tUpdate := FKTheTime(r["update_status_time"])
+		// tBIGIP := FKTheTime(r["call_bigip_time"])
+		r["dur_neu_drv"] = fmt.Sprintf("%v", tDriver.Sub(tNeutron))
+		r["dur_drv_rpc"] = fmt.Sprintf("%v", tMQ.Sub(tDriver))
+		r["dur_rpc_agt"] = fmt.Sprintf("%v", tAgent.Sub(tMQ))
+		r["dur_agt_upd"] = fmt.Sprintf("%v", tUpdate.Sub(tAgent))
+		r["total"] = fmt.Sprintf("%v", tUpdate.Sub(tNeutron))
 	}
 }
 

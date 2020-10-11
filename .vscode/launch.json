@@ -18,7 +18,10 @@
             "mode": "auto",
             "program": "${fileDirname}",
             "env": {},
-            "args": ["--server-log", "/Users/zong/Works/x.2020.09.24-cmcc-2-2-manualconfig-kinds-of-issues/req-fcceba74-5367-48a5-bddc-aa9e1b34cf6b.log"]
+            "args": [
+                // "--logpath", "../req-*"
+                "--logpath", "../req-1a9d27bf-6c9e-41f0-9f95-e03fc571c451.create_member-11.log"
+            ]
         }
     ]
 }
