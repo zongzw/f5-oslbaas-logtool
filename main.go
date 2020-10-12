@@ -10,6 +10,7 @@ import (
 	"time"
 	// "encoding/json"
 	"path/filepath"
+	"sync"
 	// "regexp"
 	"github.com/trivago/grok"
 )
@@ -20,6 +21,7 @@ const FK_TIMELAYOUT = "2006-01-02 15:04:05"
 
 var (
 	logger = log.New(os.Stdout, "", log.LstdFlags)
+	
 	pBasicFields = map[string]string{
 		"UUID": `[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}`,    	// 6245c77d-5017-4657-b35b-7ab1d247112b
 		"REQID": `req-%{UUID}`,										// req-8cadad28-8315-45ca-818c-6a229dfb73e1
@@ -100,6 +102,10 @@ var (
 		// "test_basic_pattern":
 		// 	`%{LBTYPE:object_type}`,
 	}
+
+	rltLock = &sync.Mutex{}
+	threads = make(chan bool, 5)
+	wg = sync.WaitGroup{}
 )
 
 func main() {
@@ -114,9 +120,9 @@ func main() {
 		"Path regex pattern can be used WITHIN \"\".\n" +
 		"e.g: --logpath /path/to/f5-openstack-agent.log " +
 		"--logpath \"/var/log/neutron/f5-openstack-*.log\" " +
-		"--logpath \"/var/log/neutron/server*.log\"")
+		"--logpath /var/log/neutron/server\\*.log")
 	flag.StringVar(&output_filepath, "output-filepath", "", 
-		"Output the result to file, e.g: /path/to/result.json")
+		"Output the result to file, e.g: /path/to/result.csv")
 	// flag.StringVar(&output_ts, "output-ts", "./result.json", 
 	// 	"Output the result to f5-telemetry-analytics. e.g: http://1.1.1.1:200002")
 	flag.BoolVar(&t, "test", false, "Program self test option..")
@@ -142,8 +148,11 @@ func main() {
 
 	result := map[string]map[string]string{}
 	for _, f := range(fileHandlers) {
-		ReadAndMatch(g, f, pLBaaSv2, result)
+		wg.Add(1)
+		go ReadAndMatch(g, f, pLBaaSv2, result)
 	}
+
+	wg.Wait()
 
 	CalculateDuration(result)
 
@@ -203,7 +212,7 @@ func handleArguments(logpaths []string, output_filepath string) ([]*os.File, err
 
 	// handle output file for result.
 	if output_filepath == "" {
-		return nil, fmt.Errorf("output_filepath should be appointed.")
+		return nil, fmt.Errorf("--output-filepath should be appointed.")
 	}
 	dir, err := filepath.Abs(filepath.Dir(output_filepath))
 	if err != nil {
@@ -293,7 +302,15 @@ func handleArguments(logpaths []string, output_filepath string) ([]*os.File, err
 }
 
 func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[string]map[string]string) {
-	defer fr.Close()
+	threads <- true
+
+	log.Printf("Start to reading %s\n", fr.Name())
+
+	defer func() {
+		defer fr.Close()
+		defer wg.Done()
+		<- threads
+	}()
 
 	scanner := bufio.NewScanner(fr)
 	maxCapacity := 512 * 1024  // default max size 64*1024
@@ -322,6 +339,7 @@ func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[str
 				continue
 			}
 		
+			rltLock.Lock()
 			if _, ok := values["req_id"]; !ok {
 				logger.Fatal("no req-id matched.")
 			 }
@@ -330,11 +348,10 @@ func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[str
 			if _, ok := result[req_id]; !ok {
 				result[req_id] = map[string]string{}
 			}
-
 			 for k, v := range values {
 				result[req_id][k] = v
-
 			 }
+			 rltLock.Unlock()
 
 			 break
 		}
