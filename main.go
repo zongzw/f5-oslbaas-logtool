@@ -14,219 +14,13 @@ import (
 	"github.com/trivago/grok"
 )
 
-type Value interface {
-	String() string
-	Set(string) error
-}
-
 type arrayFlags []string
-
-func (i *arrayFlags) String() string {
-	return fmt.Sprint(*i)
-}
-
-func (i *arrayFlags) Set(value string) error {
-	*i = append(*i, value)
-	return nil
-}
-
-func IsContains(items []string, item string) bool {
-	for _, n := range items {
-		if n == item {
-			return true
-		}
-	}
-	return false
-}
-
-func handleArguments(logpaths []string, output_file, output_ts  string) ([]*os.File, error){
-
-	// handle output file for result.
-	if output_file == "" {
-		return nil, fmt.Errorf("output_filepath should be appointed.")
-	}
-	dir, err := filepath.Abs(filepath.Dir(output_file))
-	if err != nil {
-		return nil, err
-	} else {
-		_, err := os.Stat(dir)
-		if os.IsNotExist(err) {
-			return nil, err
-		}
-	}
-	_, err = os.Stat(output_file)
-	if err == nil {
-		return nil, fmt.Errorf("File %s already exists.", output_file)
-	}
-
-	var fileHandlers []*os.File
-
-	// parse regex paths
-	paths :=[]string{}
-	pathOK := true
-	for _, n := range logpaths {
-		p := string(n)
-		ms, e := filepath.Glob(p)
-		if e != nil {
-			log.Printf("Invalid file path or path pattern: %s\n", p)
-			pathOK = false
-		}
-		paths = append(paths, ms...)
-	}
-	if !pathOK || len(paths) == 0 {
-		return nil, fmt.Errorf("Invalid file path detected, cannot to continue.\n")
-	}
-
-
-	fmt.Println(logpaths)
-	fmt.Println(paths)
-	
-	// find absolute paths
-	pathOK = true
-	for i, p := range paths {
-		absP, err := filepath.Abs(p)
-		if err != nil {
-			log.Printf("Cannot determine the absolute path for %s\n", p)
-			pathOK = false
-		}
-		paths[i] = absP
-	}
-	if !pathOK {
-		return nil, fmt.Errorf("Invalid paths found while getting the absolute path. Cannot continue.\n")
-	}
-
-	// remove duplicate paths
-	noDupPaths := []string{}
-	for _, p := range paths {
-		if !IsContains(noDupPaths, p) {
-			noDupPaths = append(noDupPaths, p)
-		}
-	}
-	paths = noDupPaths
-	log.Printf("Handling files: %s\n", paths)
-
-	// open as *os.File for reading
-	pathOK = true
-	for _, n := range paths {
-		p := string(n)
-		f, err := os.Stat(string(p))
-		if err == nil {
-		}
-
-		if os.IsNotExist(err) {
-			log.Println(err.Error())
-			pathOK = false
-		}
-
-		if f.IsDir() {
-			log.Printf("%s should be a file, not a directory.\n", f.Name())
-			pathOK = false
-		}
-
-		fr, err := os.Open(p)
-		if err != nil {
-			return nil, err
-		}
-		fileHandlers = append(fileHandlers, fr)
-	}
-	if !pathOK {
-		return nil, fmt.Errorf("Invalid path(s) provided.")
-	}
-
-	return fileHandlers, nil
-}
-
-func read_and_match(g *grok.Grok, fr *os.File, p map[string]string, result map[string]map[string]string) {
-	defer fr.Close()
-
-	scanner := bufio.NewScanner(fr)
-	maxCapacity := 512 * 1024  // default max size 64*1024
-	buf := make([]byte, maxCapacity)
-	scanner.Buffer(buf, maxCapacity)
-
-	lines := 0
-	for scanner.Scan() {
-		lines += 1
-		if lines % 50000 == 0 {
-			log.Printf("read %d lines\n", lines)
-		}
-		// fmt.Println(scanner.Text())
-		for k, _ := range p {
-			// fmt.Println(scanner.Text())
-			// fmt.Println(k)
-			values, err := g.ParseString(fmt.Sprintf("%%{%s}", k), scanner.Text())
-			if err != nil {
-				log.Fatal(err)
-			 }
-		
-			if len(values) == 0 {
-				// log.Println("no match for this pattern.")
-				continue
-			}
-		
-			if _, ok := values["req_id"]; !ok {
-				log.Fatal("no req-id matched.")
-			 }
-
-			req_id := values["req_id"]
-			if _, ok := result[req_id]; !ok {
-				result[req_id] = map[string]string{}
-			}
-
-			 for k, v := range values {
-				result[req_id][k] = v
-
-			 }
-
-			 break
-		}
-		
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("Error happens at line %d\n", lines)
-		log.Fatal(err)
-	} else {
-		log.Printf("Read from file %s, lines: %d\n", fr.Name(), lines)
-	}
-}
 
 const FK_TIMELAYOUT = "2006-01-02 15:04:05"
 
-func main() {
-
-	var logpaths arrayFlags
-	// var agent_logs arrayFlags
-	var output_file string
-	var output_ts string
-
-	flag.Var(&logpaths, "logpath", 
-		"The log path for analytics. It can be used multiple times. " +
-		"Path regex pattern can be used WITHIN \"\".\n" +
-		"e.g: --logpath /path/to/f5-openstack-agent.log " +
-		"--logpath \"/var/log/neutron/f5-openstack-*.log\" " +
-		"--logpath \"/var/log/neutron/server*.log\"")
-	flag.StringVar(&output_file, "output-filepath", "./result.json", 
-		"Output the result to file, e.g: /path/to/result.json")
-	flag.StringVar(&output_ts, "output-ts", "./result.json", 
-		"Output the result to f5-telemetry-analytics. e.g: http://1.1.1.1:200002")
-
-	flag.Parse()
-
-	// fmt.Println(logpaths)
-	// fmt.Println(agent_logs)
-	// fmt.Println(output_file)
-	// fmt.Println(output_ts)
-
-	fileHandlers, err := handleArguments(logpaths, output_file, output_file)
-	
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, f := range fileHandlers {
-		defer f.Close()
-	}
-
-	pBasicFields := map[string]string{
+var (
+	logger = log.New(os.Stdout, "", log.LstdFlags)
+	pBasicFields = map[string]string{
 		"UUID": `[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}`,    	// 6245c77d-5017-4657-b35b-7ab1d247112b
 		"REQID": `req-%{UUID}`,										// req-8cadad28-8315-45ca-818c-6a229dfb73e1
 		"DATETIME": `\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{3}`,	// 2020-09-27 19:22:54.486
@@ -237,7 +31,7 @@ func main() {
 		"ACTION": `(create|update|delete)`,
 	}
 
-	pLBaaSv2 := map[string]string{
+	pLBaaSv2 = map[string]string{
 
 		// 2020-09-27 19:22:54.485 68316 DEBUG neutron.api.v2.base 
 		// [req-8cadad28-8315-45ca-818c-6a229dfb73e1 009ac6496334436a8eba8daa510ef659 62c38230485b4794a8eedece5dac9192 - default default] Request body: 
@@ -306,36 +100,60 @@ func main() {
 		// "test_basic_pattern":
 		// 	`%{LBTYPE:object_type}`,
 	}
+)
 
-	pattern :=map[string]string {}
+func main() {
 
-	for k, v := range pBasicFields {
-		pattern[k] = v
+	var logpaths arrayFlags
+	var output_filepath string
+	// var output_ts string
+	var t bool
+
+	flag.Var(&logpaths, "logpath", 
+		"The log path for analytics. It can be used multiple times. " +
+		"Path regex pattern can be used WITHIN \"\".\n" +
+		"e.g: --logpath /path/to/f5-openstack-agent.log " +
+		"--logpath \"/var/log/neutron/f5-openstack-*.log\" " +
+		"--logpath \"/var/log/neutron/server*.log\"")
+	flag.StringVar(&output_filepath, "output-filepath", "", 
+		"Output the result to file, e.g: /path/to/result.json")
+	// flag.StringVar(&output_ts, "output-ts", "./result.json", 
+	// 	"Output the result to f5-telemetry-analytics. e.g: http://1.1.1.1:200002")
+	flag.BoolVar(&t, "test", false, "Program self test option..")
+	flag.Parse()
+
+	if t {
+		TestProg()
+		return
 	}
 
-	for k, v := range pLBaaSv2 {
-		pattern[k] = v
+	fileHandlers, err := handleArguments(logpaths, output_filepath)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	for _, f := range fileHandlers {
+		defer f.Close()
 	}
 
-	g, e := grok.New(grok.Config{
-		NamedCapturesOnly: true,
-		Patterns: pattern,
-	})
+	g, e := MakeGrok()
 	if e != nil {
-		log.Panic(e)
+		logger.Fatal(e)
 	}
 
 	result := map[string]map[string]string{}
 	for _, f := range(fileHandlers) {
-		read_and_match(g, f, pLBaaSv2, result)
+		ReadAndMatch(g, f, pLBaaSv2, result)
 	}
-	
 
 	CalculateDuration(result)
 
-	fw, e := os.Create(output_file)
+	OutputResult(output_filepath, result)
+}
+
+func OutputResult(filepath string, result map[string]map[string]string) {
+	fw, e := os.Create(filepath)
 	if e != nil {
-		log.Fatal(e)
+		logger.Fatal(e)
 	}
 	defer fw.Close()
 
@@ -347,7 +165,7 @@ func main() {
 
 	_, e = fw.WriteString(strings.Join(title_line, ",") + "\n")
 	if e != nil {
-		log.Fatal(e)
+		logger.Fatal(e)
 	}
 
 	for _, v := range result {
@@ -359,19 +177,188 @@ func main() {
 
 		_, e := fw.WriteString(line)
 		if e != nil {
-			log.Fatal(e)
+			logger.Fatal(e)
 		}
 	}
 }
 
-// func GetTimestamp(r regexp.Regexp, datm string) time.Time {
+func MakeGrok() (*grok.Grok, error) {
+	pattern :=map[string]string {}
+
+	for k, v := range pBasicFields {
+		pattern[k] = v
+	}
+	for k, v := range pLBaaSv2 {
+		pattern[k] = v
+	}
+
+	g, e := grok.New(grok.Config{
+		NamedCapturesOnly: true,
+		Patterns: pattern,
+	})
+	return g, e
+}
+
+func handleArguments(logpaths []string, output_filepath string) ([]*os.File, error){
+
+	// handle output file for result.
+	if output_filepath == "" {
+		return nil, fmt.Errorf("output_filepath should be appointed.")
+	}
+	dir, err := filepath.Abs(filepath.Dir(output_filepath))
+	if err != nil {
+		return nil, err
+	} else {
+		_, err := os.Stat(dir)
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	_, err = os.Stat(output_filepath)
+	if err == nil {
+		return nil, fmt.Errorf("File %s already exists.", output_filepath)
+	}
+
+	var fileHandlers []*os.File
+
+	// parse regex paths
+	paths :=[]string{}
+	pathOK := true
+	for _, n := range logpaths {
+		p := string(n)
+		ms, e := filepath.Glob(p)
+		if e != nil {
+			logger.Printf("Invalid file path or path pattern: %s\n", p)
+			pathOK = false
+		}
+		paths = append(paths, ms...)
+	}
+	if !pathOK {
+		return nil, fmt.Errorf("Invalid file path detected, cannot to continue.\n")
+	}
+
+	// find absolute paths
+	pathOK = true
+	for i, p := range paths {
+		absP, err := filepath.Abs(p)
+		if err != nil {
+			logger.Printf("Cannot determine the absolute path for %s\n", p)
+			pathOK = false
+		}
+		paths[i] = absP
+	}
+	if !pathOK {
+		return nil, fmt.Errorf("Invalid paths found while getting the absolute path. Cannot continue.\n")
+	}
+
+	// remove duplicate paths
+	noDupPaths := []string{}
+	for _, p := range paths {
+		if !IsContains(noDupPaths, p) {
+			noDupPaths = append(noDupPaths, p)
+		}
+	}
+	paths = noDupPaths
+	logger.Printf("Handling files: %s\n", paths)
+
+	// open as *os.File for reading
+	pathOK = true
+	for _, n := range paths {
+		p := string(n)
+		f, err := os.Stat(string(p))
+		if err == nil {
+		}
+
+		if os.IsNotExist(err) {
+			logger.Println(err.Error())
+			pathOK = false
+		}
+
+		if f.IsDir() {
+			logger.Printf("%s should be a file, not a directory.\n", f.Name())
+			pathOK = false
+		}
+
+		fr, err := os.Open(p)
+		if err != nil {
+			return nil, err
+		}
+		fileHandlers = append(fileHandlers, fr)
+	}
+	if !pathOK {
+		return nil, fmt.Errorf("Invalid path(s) provided.")
+	}
+
+	return fileHandlers, nil
+}
+
+func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[string]map[string]string) {
+	defer fr.Close()
+
+	scanner := bufio.NewScanner(fr)
+	maxCapacity := 512 * 1024  // default max size 64*1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	fs := time.Now().UnixNano()
+	lines := 0
+	matchTime := int64(0)
+
+	for scanner.Scan() {
+		lines += 1
+		if lines % 50000 == 0 {
+			logger.Printf("read %d lines\n", lines)
+		}
+		t := scanner.Text()
+
+		s := time.Now().UnixNano()
+		for k, _ := range p {
+			values, err := g.ParseString(fmt.Sprintf("%%{%s}", k), t)
+			if err != nil {
+				logger.Fatal(err)
+			 }
+		
+			if len(values) == 0 {
+				continue
+			}
+		
+			if _, ok := values["req_id"]; !ok {
+				logger.Fatal("no req-id matched.")
+			 }
+
+			req_id := values["req_id"]
+			if _, ok := result[req_id]; !ok {
+				result[req_id] = map[string]string{}
+			}
+
+			 for k, v := range values {
+				result[req_id][k] = v
+
+			 }
+
+			 break
+		}
+		e := time.Now().UnixNano()
+		matchTime += e - s
+		
+	}
+
+	fe := time.Now().UnixNano()
+	if err := scanner.Err(); err != nil {
+		logger.Printf("Error happens at line %d\n", lines)
+		logger.Fatal(err)
+	} else {
+		logger.Printf("Read from file %s, lines: %d, parse time: %v ms, total time: %v ms \n", 
+			fr.Name(), lines, matchTime/1e6, (fe - fs)/1e6)
+	}
+}
+
 func FKTheTime(datm string) time.Time {
 	dt, _ := time.Parse(FK_TIMELAYOUT, datm)
-	// fmt.Printf("%s\n", e)
 	return dt;
 }
-func CalculateDuration(result map[string]map[string]string) {
 
+func CalculateDuration(result map[string]map[string]string) {
 	for _, r := range result {
 		tNeutron := FKTheTime(r["neutron_api_time"])
 		tDriver := FKTheTime(r["call_f5driver_time"])
@@ -387,28 +374,60 @@ func CalculateDuration(result map[string]map[string]string) {
 	}
 }
 
-func debug(values map[string]string, e error) {
-	if e != nil {
-		log.Println(e.Error())
-		return
-	 }
-
-	 if len(values) == 0 {
-		 log.Println("no match for this pattern.")
-		 return
-	 }
-
-	 for k, v := range values {
-		 log.Printf("%+25s: %s\n", k, v)
-	 }
-	 log.Println()
+func (i *arrayFlags) String() string {
+	return fmt.Sprint(*i)
 }
 
-func test_sg(k string, v string, g *grok.Grok) (map[string]string, error) {
+func (i *arrayFlags) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
+
+func IsContains(items []string, item string) bool {
+	for _, n := range items {
+		if n == item {
+			return true
+		}
+	}
+	return false
+}
+
+func TestProg() {
+	g, e := MakeGrok()
+	if e != nil {
+		logger.Fatal(e)
+	}
+
+	for k, t := range TestCases() {
+		for _, tn := range t {
+			v, e := TestMatch(k, tn, g)
+			DebugTesting(v, e)
+		}
+	}
+}
+
+func DebugTesting(values map[string]string, e error) {
+	if e != nil {
+		logger.Println(e.Error())
+		return
+	}
+
+	if len(values) == 0 {
+		logger.Println("no match for this pattern.")
+		return
+	}
+
+	for k, v := range values {
+		logger.Printf("%+25s: %s\n", k, v)
+	}
+	logger.Println()
+}
+
+func TestMatch(k string, v string, g *grok.Grok) (map[string]string, error) {
 	return g.ParseString(fmt.Sprintf("%%{%s}", k), v)
 }
 
-func tests() map[string][]string {
+func TestCases() map[string][]string {
 	return map[string][]string{
 		"neutron_api_v2_base":[]string{
 				// loadbalancer
@@ -450,9 +469,9 @@ func tests() map[string][]string {
 				`2020-10-05 10:19:18.411 295263 DEBUG f5_openstack_agent.lbaasv2.drivers.bigip.plugin_rpc [req-92db71fb-8513-431b-ac79-5423a749b6d7 009ac6496334436a8eba8daa510ef659 62c38230485b4794a8eedece5dac9192 - - -] f5_openstack_agent.lbaasv2.drivers.bigip.plugin_rpc.LBaaSv2PluginRPC method update_loadbalancer_status called with arguments (u'e2d277f7-eca2-46a4-bf2c-655856fd8733', 'ACTIVE', 'ONLINE', u'JL-B01-POD1-CORE-LB-7') {} wrapper /usr/lib/python2.7/site-packages/oslo_log/helpers.py:66`,
 			},
 
-		"test_basic_pattern":[]string{
-				// loadbalancer
-				`LoadBalancerManager`,
-			},
+		// "test_basic_pattern":[]string{
+		// 		// loadbalancer
+		// 		`LoadBalancerManager`,
+		// 	},
 	}
 }
