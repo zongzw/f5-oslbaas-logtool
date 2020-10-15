@@ -104,8 +104,25 @@ var (
 		// 	`%{LBTYPE:object_type}`,
 	}
 
+	linesBuffSize = 50
+	linesBuff = make([]string, linesBuffSize)
+
+	result = map[string]map[string]string{}
+
 	rltLock = &sync.Mutex{}
-	threads = make(chan bool, 8)
+	bufLock = &sync.Mutex{}
+
+	readDone = false
+
+	nThrParse = 100
+	nThrReadMax = 10
+	
+	chThrFiles = make(chan bool, nThrReadMax)
+	
+	wgParse = sync.WaitGroup{}
+	wgRead = sync.WaitGroup{}
+
+	debugSize = 50000
 )
 
 func main() {
@@ -134,7 +151,7 @@ func main() {
 		return
 	}
 
-	fileHandlers, err := handleArguments(logpaths, output_filepath)
+	fileHandlers, err := HandleArguments(logpaths, output_filepath)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -147,20 +164,109 @@ func main() {
 		logger.Fatal(e)
 	}
 
-	result := map[string]map[string]string{}
-	wgFiles := sync.WaitGroup{}
+	for i:=0; i<nThrParse; i++ {
+		wgParse.Add(1)
+		go Parse(g)
+	}
+	
 	for _, f := range(fileHandlers) {
-		wgFiles.Add(1)
-		go func(f *os.File) {
-			ReadAndMatch(g, f, pLBaaSv2, result)
-			wgFiles.Done()
-		}(f)
+		wgRead.Add(1)
+		go Read(f)
 	}
 
-	wgFiles.Wait()
+	wgRead.Wait()
+	readDone = true
+	wgParse.Wait()
+
 	CalculateDuration(result)
 
 	OutputResult(output_filepath, result)
+}
+
+func Parse(g *grok.Grok) {
+	defer wgParse.Done()
+
+	for true {
+		if len(linesBuff) == 0 {
+			if readDone { break }
+			time.Sleep(time.Duration(5) * time.Microsecond)
+			continue
+		}
+
+		t := ""
+		bufLock.Lock()
+		if len(linesBuff) != 0 {
+			t = linesBuff[0]
+			linesBuff = linesBuff[1:]
+		}
+		bufLock.Unlock()
+
+		if t != "" {
+			for k, _ := range pLBaaSv2 {
+				Parse2Result(g, k, t)
+			}
+		}
+	}
+}
+
+func Parse2Result(g *grok.Grok, k string, text string) {
+	values, err := g.ParseString(fmt.Sprintf("%%{%s}", k), text)
+	if err != nil { logger.Fatal(err) }
+	if len(values) == 0 { return }
+
+	rltLock.Lock()
+	if _, ok := values["req_id"]; !ok {
+		logger.Fatalf("Abnormal thing happens. No req_id matched: pattern key: %s, log: %s\n", k, text)
+	}
+
+	req_id := values["req_id"]
+	if _, ok := result[req_id]; !ok {
+		result[req_id] = map[string]string{}
+	}
+	for k, v := range values {
+		result[req_id][k] = v
+	}
+	rltLock.Unlock()
+}
+
+func Read(f *os.File) {
+	chThrFiles <- true
+	defer func(){
+		<- chThrFiles
+		wgRead.Done()
+	}()
+	log.Printf("Start to reading %s\n", f.Name())
+	
+	scanner := bufio.NewScanner(f)
+	maxCapacity := 512 * 1024  // default max size 64*1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	fs := time.Now().UnixNano()
+	lines := 0
+
+	for scanner.Scan() {
+		lines += 1
+		bufLock.Lock()
+		linesBuff = append(linesBuff, scanner.Text())
+		if lines % debugSize == 0 {
+			logger.Printf("%s, read lines %d, len of linesBuff: %d\n", f.Name(), lines, len(linesBuff))
+		}
+		bufLock.Unlock()
+
+		if len(linesBuff) > linesBuffSize {
+			time.Sleep(time.Duration(5) * time.Microsecond)
+		}
+	}
+
+	fe := time.Now().UnixNano()
+	if err := scanner.Err(); err != nil {
+		logger.Printf("Error happens at %s line %d\n", f.Name(), lines)
+		logger.Fatal(err)
+	} else {
+		logger.Printf("Read from file %s, lines: %d, total time: %v ms \n", 
+			f.Name(), lines, (fe - fs)/1e6)
+	}
 }
 
 func OutputResult(filepath string, result map[string]map[string]string) {
@@ -184,7 +290,12 @@ func OutputResult(filepath string, result map[string]map[string]string) {
 	for _, v := range result {
 		a := []string{}
 		for _, n := range title_line {
-			a = append(a, fmt.Sprintf("\"%s\"", v[n]))
+			if strings.HasSuffix(n, "_time") {
+				a = append(a, fmt.Sprintf("\"T%s\"", v[n]))
+			} else {
+				a = append(a, fmt.Sprintf("\"%s\"", v[n]))
+			}
+			
 		}
 		line := strings.Join(a, ",") + "\n"
 
@@ -212,7 +323,7 @@ func MakeGrok() (*grok.Grok, error) {
 	return g, e
 }
 
-func handleArguments(logpaths []string, output_filepath string) ([]*os.File, error){
+func HandleArguments(logpaths []string, output_filepath string) ([]*os.File, error){
 
 	// handle output file for result.
 	if output_filepath == "" {
@@ -305,80 +416,6 @@ func handleArguments(logpaths []string, output_filepath string) ([]*os.File, err
 	return fileHandlers, nil
 }
 
-func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[string]map[string]string) {
-
-	threads <- true
-	defer func() {
-		fr.Close()
-		<- threads
-	}()
-	log.Printf("Start to reading %s\n", fr.Name())
-	
-	scanner := bufio.NewScanner(fr)
-	maxCapacity := 512 * 1024  // default max size 64*1024
-	buf := make([]byte, maxCapacity)
-	scanner.Buffer(buf, maxCapacity)
-
-	fs := time.Now().UnixNano()
-	lines := 0
-	matchTime := int64(0)
-
-	wgPatterns := sync.WaitGroup{}
-	for scanner.Scan() {
-		// lopid, _ := uuid.NewUUID()
-
-		lines += 1
-		if lines % 50000 == 0 {
-			logger.Printf("%s: read %d lines\n", fr.Name(), lines)
-		}
-		t := scanner.Text()
-
-		s := time.Now().UnixNano()
-		for k, _ := range p {
-			wgPatterns.Add(1)
-			go func(k string) {
-				defer wgPatterns.Done()
-				values, err := g.ParseString(fmt.Sprintf("%%{%s}", k), t)
-				if err != nil {
-					logger.Fatal(err)
-				}
-			
-				if len(values) == 0 {
-					return
-				}
-			
-				rltLock.Lock()
-				if _, ok := values["req_id"]; !ok {
-					logger.Fatalf("Something abnormal happend. No req_id matched: pattern key: %s, log: %s\n", k, t)
-				}
-
-				req_id := values["req_id"]
-				if _, ok := result[req_id]; !ok {
-					result[req_id] = map[string]string{}
-				}
-				for k, v := range values {
-					result[req_id][k] = v
-				}
-				rltLock.Unlock()
-
-				return
-			}(k)
-		}
-		wgPatterns.Wait()
-		e := time.Now().UnixNano()
-		matchTime += e - s
-	}
-
-	fe := time.Now().UnixNano()
-	if err := scanner.Err(); err != nil {
-		logger.Printf("Error happens at line %d\n", lines)
-		logger.Fatal(err)
-	} else {
-		logger.Printf("Read from file %s, lines: %d, parse time: %v ms, total time: %v ms \n", 
-			fr.Name(), lines, matchTime/1e6, (fe - fs)/1e6)
-	}
-}
-
 func FKTheTime(datm string) time.Time {
 	dt, _ := time.Parse(FK_TIMELAYOUT, datm)
 	return dt;
@@ -426,7 +463,7 @@ func TestProg() {
 
 	for k, t := range TestCases() {
 		for _, tn := range t {
-			v, e := TestMatch(k, tn, g)
+			v, e := TestParse(k, tn, g)
 			DebugTesting(v, e)
 		}
 	}
@@ -449,7 +486,7 @@ func DebugTesting(values map[string]string, e error) {
 	logger.Println()
 }
 
-func TestMatch(k string, v string, g *grok.Grok) (map[string]string, error) {
+func TestParse(k string, v string, g *grok.Grok) (map[string]string, error) {
 	return g.ParseString(fmt.Sprintf("%%{%s}", k), v)
 }
 
