@@ -20,7 +20,8 @@
             "env": {},
             "args": [
                 // "--logpath", "../req-*"
-                "--logpath", "../req-1a9d27bf-6c9e-41f0-9f95-e03fc571c451.create_member-11.log"
+                "--logpath", "../req-1a9d27bf-6c9e-41f0-9f95-e03fc571c451.create_member-11.log",
+                "--output-filepath", "./a234.csv"
             ]
         }
     ]

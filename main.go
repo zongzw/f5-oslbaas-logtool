@@ -13,6 +13,7 @@ import (
 	"sync"
 	// "regexp"
 	"github.com/trivago/grok"
+	// "github.com/google/uuid"
 )
 
 type arrayFlags []string
@@ -104,8 +105,7 @@ var (
 	}
 
 	rltLock = &sync.Mutex{}
-	threads = make(chan bool, 5)
-	wg = sync.WaitGroup{}
+	threads = make(chan bool, 8)
 )
 
 func main() {
@@ -123,6 +123,7 @@ func main() {
 		"--logpath /var/log/neutron/server\\*.log")
 	flag.StringVar(&output_filepath, "output-filepath", "", 
 		"Output the result to file, e.g: /path/to/result.csv")
+	// TODO: output result to f5 telemetry analytics.
 	// flag.StringVar(&output_ts, "output-ts", "./result.json", 
 	// 	"Output the result to f5-telemetry-analytics. e.g: http://1.1.1.1:200002")
 	flag.BoolVar(&t, "test", false, "Program self test option..")
@@ -147,13 +148,16 @@ func main() {
 	}
 
 	result := map[string]map[string]string{}
+	wgFiles := sync.WaitGroup{}
 	for _, f := range(fileHandlers) {
-		wg.Add(1)
-		go ReadAndMatch(g, f, pLBaaSv2, result)
+		wgFiles.Add(1)
+		go func(f *os.File) {
+			ReadAndMatch(g, f, pLBaaSv2, result)
+			wgFiles.Done()
+		}(f)
 	}
 
-	wg.Wait()
-
+	wgFiles.Wait()
 	CalculateDuration(result)
 
 	OutputResult(output_filepath, result)
@@ -302,16 +306,14 @@ func handleArguments(logpaths []string, output_filepath string) ([]*os.File, err
 }
 
 func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[string]map[string]string) {
+
 	threads <- true
-
-	log.Printf("Start to reading %s\n", fr.Name())
-
 	defer func() {
-		defer fr.Close()
-		defer wg.Done()
+		fr.Close()
 		<- threads
 	}()
-
+	log.Printf("Start to reading %s\n", fr.Name())
+	
 	scanner := bufio.NewScanner(fr)
 	maxCapacity := 512 * 1024  // default max size 64*1024
 	buf := make([]byte, maxCapacity)
@@ -321,43 +323,50 @@ func ReadAndMatch(g *grok.Grok, fr *os.File, p map[string]string, result map[str
 	lines := 0
 	matchTime := int64(0)
 
+	wgPatterns := sync.WaitGroup{}
 	for scanner.Scan() {
+		// lopid, _ := uuid.NewUUID()
+
 		lines += 1
 		if lines % 50000 == 0 {
-			logger.Printf("read %d lines\n", lines)
+			logger.Printf("%s: read %d lines\n", fr.Name(), lines)
 		}
 		t := scanner.Text()
 
 		s := time.Now().UnixNano()
 		for k, _ := range p {
-			values, err := g.ParseString(fmt.Sprintf("%%{%s}", k), t)
-			if err != nil {
-				logger.Fatal(err)
-			 }
-		
-			if len(values) == 0 {
-				continue
-			}
-		
-			rltLock.Lock()
-			if _, ok := values["req_id"]; !ok {
-				logger.Fatal("no req-id matched.")
-			 }
+			wgPatterns.Add(1)
+			go func(k string) {
+				defer wgPatterns.Done()
+				values, err := g.ParseString(fmt.Sprintf("%%{%s}", k), t)
+				if err != nil {
+					logger.Fatal(err)
+				}
+			
+				if len(values) == 0 {
+					return
+				}
+			
+				rltLock.Lock()
+				if _, ok := values["req_id"]; !ok {
+					logger.Fatalf("Something abnormal happend. No req_id matched: pattern key: %s, log: %s\n", k, t)
+				}
 
-			req_id := values["req_id"]
-			if _, ok := result[req_id]; !ok {
-				result[req_id] = map[string]string{}
-			}
-			 for k, v := range values {
-				result[req_id][k] = v
-			 }
-			 rltLock.Unlock()
+				req_id := values["req_id"]
+				if _, ok := result[req_id]; !ok {
+					result[req_id] = map[string]string{}
+				}
+				for k, v := range values {
+					result[req_id][k] = v
+				}
+				rltLock.Unlock()
 
-			 break
+				return
+			}(k)
 		}
+		wgPatterns.Wait()
 		e := time.Now().UnixNano()
 		matchTime += e - s
-		
 	}
 
 	fe := time.Now().UnixNano()
